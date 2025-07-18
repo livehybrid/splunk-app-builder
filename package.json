@@ -4,10 +4,14 @@
   "description": "Prototype Splunk app generator",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.56.0"
+  }
 }

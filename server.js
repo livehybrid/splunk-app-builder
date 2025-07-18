@@ -2,6 +2,29 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { generateCode } = require('./claude');
+const { pushToGitHub } = require('./github');
+
+function ensureUccGen() {
+  try {
+    execSync('which ucc-gen', { stdio: 'ignore' });
+  } catch {
+    try {
+      execSync('pip install --quiet splunk-add-on-ucc-framework');
+    } catch (e) {
+      console.warn('Failed to install ucc-gen:', e.message);
+    }
+  }
+}
+
+function runUccGen(dir, meta) {
+  ensureUccGen();
+  try {
+    execSync(`ucc-gen --output ${dir} --addon-name ${meta.appName}`, { stdio: 'inherit' });
+  } catch (e) {
+    fs.writeFileSync(path.join(dir, 'ucc_error.log'), String(e));
+  }
+}
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -27,19 +50,38 @@ function serveStatic(req, res) {
   });
 }
 
-function handleGenerate(req, res) {
+async function handleGenerate(req, res) {
   let body = '';
   req.on('data', chunk => body += chunk);
-  req.on('end', () => {
+  req.on('end', async () => {
     try {
       const data = JSON.parse(body);
-      const appName = (data.appName || 'my_app').replace(/\W+/g, '_');
-      const appDir = path.join(GEN_DIR, appName);
+      const meta = {
+        appName: (data.appName || 'my_app').replace(/\W+/g, '_'),
+        author: data.author || '',
+        version: data.version || '1.0.0',
+        description: data.description || '',
+        inputType: data.inputType || ''
+      };
+
+      const appDir = path.join(GEN_DIR, meta.appName);
       fs.mkdirSync(appDir, { recursive: true });
-      fs.writeFileSync(path.join(appDir, 'README.txt'), `Generated Splunk app: ${appName}\n`);
-      fs.writeFileSync(path.join(appDir, 'metadata.json'), JSON.stringify(data, null, 2));
+      fs.writeFileSync(path.join(appDir, 'metadata.json'), JSON.stringify(meta, null, 2));
+      fs.writeFileSync(path.join(appDir, 'README.txt'), `Generated Splunk app: ${meta.appName}\n${meta.description}\n`);
+      runUccGen(appDir, meta);
+
+      if (process.env.ANTHROPIC_API_KEY || process.env.OPENROUTER_API_KEY) {
+        try {
+          const prompt = `You are a senior Splunk developer. Build a minimal Splunk Add-on using the UCC Framework.\nName: ${meta.appName}\nAuthor: ${meta.author}\nVersion: ${meta.version}\nDescription: ${meta.description}\nInput: ${meta.inputType}\nReturn only the contents of addon.py implementing a placeholder modular input.`;
+          const code = await generateCode(prompt);
+          fs.writeFileSync(path.join(appDir, 'addon.py'), code);
+        } catch (e) {
+          fs.writeFileSync(path.join(appDir, 'claude_error.log'), String(e));
+        }
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', app: appName }));
+      res.end(JSON.stringify({ status: 'ok', app: meta.appName }));
     } catch (e) {
       res.writeHead(500);
       res.end('Error generating app');
@@ -76,11 +118,43 @@ function handleDownload(req, res) {
   }
 }
 
+function handleGitHub(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const { app, repo, token } = JSON.parse(body);
+      if (!app || !repo || !token) {
+        res.writeHead(400);
+        return res.end('Missing parameters');
+      }
+      const appDir = path.join(GEN_DIR, app);
+      if (!fs.existsSync(appDir)) {
+        res.writeHead(404);
+        return res.end('App not found');
+      }
+      const ok = pushToGitHub(appDir, repo, token);
+      if (ok) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+      } else {
+        res.writeHead(500);
+        res.end('GitHub push failed');
+      }
+    } catch (e) {
+      res.writeHead(500);
+      res.end('Server error');
+    }
+  });
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/generate') {
     return handleGenerate(req, res);
   } else if (req.method === 'GET' && req.url.startsWith('/api/download')) {
     return handleDownload(req, res);
+  } else if (req.method === 'POST' && req.url === '/api/github') {
+    return handleGitHub(req, res);
   } else {
     return serveStatic(req, res);
   }
