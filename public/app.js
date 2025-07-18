@@ -9,7 +9,9 @@ const questions = [
   { key: 'author', text: 'Who is the author?' },
   { key: 'version', text: 'Initial version number?', default: '1.0.0' },
   { key: 'description', text: 'Provide a short description of the app.' },
-  { key: 'inputType', text: 'Describe the modular input this add-on should implement.' }
+  { key: 'inputType', text: 'Describe the modular input this add-on should implement.' },
+  { key: 'githubRepo', text: 'GitHub repo to push to (owner/repo) or leave blank.' },
+  { key: 'githubToken', text: 'GitHub token (leave blank to skip push).' }
 ];
 
 let step = 0;
@@ -47,6 +49,19 @@ sendBtn.addEventListener('click', async () => {
     addMessage('system', `App ${currentApp} generated.`);
     downloadLink.href = `/api/download?app=${currentApp}`;
     downloadDiv.classList.remove('hidden');
+    if (answers.githubRepo && answers.githubToken) {
+      addMessage('system', 'Pushing to GitHub...');
+      const gh = await fetch('/api/github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: currentApp, repo: answers.githubRepo, token: answers.githubToken })
+      });
+      if (gh.ok) {
+        addMessage('system', 'GitHub push complete');
+      } else {
+        addMessage('system', 'GitHub push failed');
+      }
+    }
   } else {
     addMessage('system', 'Error generating app');
   }

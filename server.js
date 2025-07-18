@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { generateCode } = require('./claude');
+const { pushToGitHub } = require('./github');
 
 function ensureUccGen() {
   try {
@@ -117,11 +118,43 @@ function handleDownload(req, res) {
   }
 }
 
+function handleGitHub(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const { app, repo, token } = JSON.parse(body);
+      if (!app || !repo || !token) {
+        res.writeHead(400);
+        return res.end('Missing parameters');
+      }
+      const appDir = path.join(GEN_DIR, app);
+      if (!fs.existsSync(appDir)) {
+        res.writeHead(404);
+        return res.end('App not found');
+      }
+      const ok = pushToGitHub(appDir, repo, token);
+      if (ok) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+      } else {
+        res.writeHead(500);
+        res.end('GitHub push failed');
+      }
+    } catch (e) {
+      res.writeHead(500);
+      res.end('Server error');
+    }
+  });
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/generate') {
     return handleGenerate(req, res);
   } else if (req.method === 'GET' && req.url.startsWith('/api/download')) {
     return handleDownload(req, res);
+  } else if (req.method === 'POST' && req.url === '/api/github') {
+    return handleGitHub(req, res);
   } else {
     return serveStatic(req, res);
   }
